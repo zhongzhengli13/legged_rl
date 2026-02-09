@@ -184,7 +184,7 @@ class H1Config:
         # if true: compute ang vel command from heading error #False:直接告诉你转多快;Ture:只告诉你“面朝哪”
         heading_command = False
         # 修改
-        lin_vel_x_range = [0, 1.0]
+        lin_vel_x_range = [0.2, 1.0]
         # lin_vel_x_range = [-0.1, 0.1]  # 最多向前：0.1 m/s;最多向后：0.1 m/s #原始
         # 修改
         ang_vel_yaw_range = [0, 0]

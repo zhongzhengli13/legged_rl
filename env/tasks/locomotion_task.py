@@ -1259,7 +1259,7 @@ class LocomotionTask(BaseTask):
 
         rew_dict = dict(
             balance=balance_rew * 0.5,
-            fwd_vel=forward_vel_rew * 2.5,
+            fwd_vel=forward_vel_rew * 4,
             yaw_rat=yaw_rate_rew * 1.8,
             lateral_vel=lateral_vel_rew * 0.5,
             vertical_vel=vertical_vel_rew * 0.5,
@@ -1273,7 +1273,7 @@ class LocomotionTask(BaseTask):
             sa_const=sa_constraint_rew * balance_rew * 0.2,
             foot_phase=foot_phase_rew * balance_rew * 0.5,
             jnt_pos_err=joint_pos_error_rew * balance_rew * 0.3,
-            act_smo=action_smooth_rew * balance_rew * 0.5,
+            act_smo=action_smooth_rew * balance_rew * 0.2,
             net_smo=net_out_smooth_rew * balance_rew * 0.00002,
             net_out_val=net_out_val_rew * balance_rew * 0.00001,
             foot_slip=foot_slip_rew * balance_rew * 1.2,
