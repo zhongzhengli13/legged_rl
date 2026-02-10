@@ -809,9 +809,13 @@ class LocomotionTask(BaseTask):
         物理含义：高速奔跑时：身体自然会有一定侧摆，策略不必过度“僵直”地去抑制 vy，否则容易僵硬、摔倒。低速或原地踏步时：任何不必要的侧移都是“能量浪费”或“平衡差”，惩罚要更严厉。
         """
         lateral_vel_rew = torch.exp(
-            -torch.clip(5.0 / lin_vel_x_norm, min=3.0, max=15.0)
+            -torch.clip(20 / lin_vel_x_norm, min=3.0, max=15.0)
             * torch.norm(self.env.base_lin_vel[:, [1]], dim=1, keepdim=True) ** 2
-        )  # lateral_vel_rew = exp( −k * vy² )
+        )  # lateral_vel_rew = exp( −k * vy² ) #原始是5.0/...
+        # # 【新增】线性惩罚项！ #修改
+        # # 只要有侧向速度，就直接扣分。这样即使漂移很快，梯度依然存在，逼迫网络修正。
+        # lateral_vel_rew -= 2.0 * torch.abs(self.env.base_lin_vel[:, [1]])
+
         base_heit_rew = torch.exp(
             -60 * (self.env.base_pos[:, [2]] - 1.0) ** 2
         )  # self.env.base_pos[:, [2]]实际高度；1m 为期望高度
@@ -826,22 +830,28 @@ class LocomotionTask(BaseTask):
 
         forward_vel_rew = (
             torch.exp(
-                -torch.clip(4.0 / lin_vel_x_norm, min=2.0, max=10.0)
+                -torch.clip(3.0 / lin_vel_x_norm, min=2.0, max=10.0)
                 * (self.commands[:, [0]] - self.env.base_lin_vel[:, [0]]) ** 2
             )
             * balance_rew
-        )  # exp(-k * (cmd_vx - real_vx)^2) * balance_rew
+        )  # exp(-k * (cmd_vx - real_vx)^2) * balance_rew #原始为4.0/...
         yaw_rate_rew = (
             torch.exp(
-                -torch.clip(2.5 / lin_vel_x_norm, min=1.5, max=6.0)
+                -torch.clip(10 / lin_vel_x_norm, min=1.5, max=6.0)
                 * (self.commands[:, [2]] - self.env.base_ang_vel[:, [2]]) ** 2
             )
             * balance_rew
-        )  # exp(-k * (cmd_yaw - real_yaw)^2) * balance_rew
+        )  # exp(-k * (cmd_yaw - real_yaw)^2) * balance_rew #原始2.5/...
+
+        # # 【新增】线性惩罚项！防止它歪头。#修改
+        # yaw_rate_rew -= 1.0 * torch.abs(self.commands[:, [2]] - self.env.base_ang_vel[:, [2]])
+        # # ------------------- 修改结束 -------------------
 
         # stride_rew = torch.abs(self.env.foot_pos_hd[:, [0]] - self.env.foot_pos_hd[:, [3]]).clip(max=0.5) / 0.5
         # stride_rew *= self.static_flag
-
+        
+        # 找到这行代码：lateral_vel_rew += (-0.1 / lin_vel_x_norm ...) #修改
+        # 把它注释掉或者删除，因为我们上面已经加了更强的线性惩罚，不需要这个弱惩罚了。
         lateral_vel_rew += (
             -0.1
             / lin_vel_x_norm
@@ -916,9 +926,12 @@ class LocomotionTask(BaseTask):
             )
             * self.static_flag
         )
-
-        foot_height_rew += -20.0 * torch.sum(
-            (self.foot_height - 0.1).clip(min=0.0), dim=1, keepdim=True
+        # ------------------- 修改这里 -------------------
+        # 原代码: -20.0 * ... (惩罚太重，导致它不敢抬腿，从而跛脚)
+        # 建议修改: -5.0 * ... (降低惩罚，允许偶尔抬高一点)
+        # 同时: 0.1 改为 0.13 (稍微放宽高度阈值)
+        foot_height_rew += -5 * torch.sum(
+            (self.foot_height - 0.13).clip(min=0.0), dim=1, keepdim=True
         )  # foot_height ≈ 0.1m #惩罚“过度抬脚”
 
         foot_height_rew += (
@@ -1259,13 +1272,13 @@ class LocomotionTask(BaseTask):
 
         rew_dict = dict(
             balance=balance_rew * 0.5,
-            fwd_vel=forward_vel_rew * 4,
-            yaw_rat=yaw_rate_rew * 1.8,
-            lateral_vel=lateral_vel_rew * 0.5,
+            fwd_vel=forward_vel_rew * 3,
+            yaw_rat=yaw_rate_rew * 2,
+            lateral_vel=lateral_vel_rew * 2,
             vertical_vel=vertical_vel_rew * 0.5,
             ang_vel=ang_vel_rew * 0.8,
             twist=twist_rew * 2.5,
-            foot_clr=foot_clear_rew * balance_rew * 1,
+            foot_clr=foot_clear_rew * balance_rew * 5,
             foot_supt=foot_support_rew * balance_rew * 0.7,
             foot_heit=foot_height_rew * balance_rew * 0.8,
             leg_width_rew=leg_width_rew * balance_rew * 1.2,
