@@ -930,8 +930,8 @@ class LocomotionTask(BaseTask):
         # 原代码: -20.0 * ... (惩罚太重，导致它不敢抬腿，从而跛脚)
         # 建议修改: -5.0 * ... (降低惩罚，允许偶尔抬高一点)
         # 同时: 0.1 改为 0.13 (稍微放宽高度阈值)
-        foot_height_rew += -5 * torch.sum(
-            (self.foot_height - 0.13).clip(min=0.0), dim=1, keepdim=True
+        foot_height_rew += -2 * torch.sum(
+            (self.foot_height - 0.2).clip(min=0.0), dim=1, keepdim=True
         )  # foot_height ≈ 0.1m #惩罚“过度抬脚”
 
         foot_height_rew += (
@@ -966,12 +966,12 @@ class LocomotionTask(BaseTask):
                         dim=1, keepdim=True)
             * self.static_flag
         )  # 惩罚“摆动相却受力”
-        feet_contact_frc_rew += -torch.norm(
-            (torch.abs(self.env.foot_frc - 250.0)
-             * support_foot_index).clip(min=0.0),
-            dim=1,
-            keepdim=True,
-        )  # 惩罚“支撑脚力偏离 250 N”
+        # feet_contact_frc_rew += -torch.norm(
+        #     (torch.abs(self.env.foot_frc - 250.0)
+        #      * support_foot_index).clip(min=0.0),
+        #     dim=1,
+        #     keepdim=True,
+        # )  # 惩罚“支撑脚力偏离 250 N”
         feet_contact_frc_rew += torch.sum(
             self.env.foot_frc - 250.0, dim=1, keepdim=True
         ).clip(max=0.0) * torch.logical_not(
@@ -1272,15 +1272,15 @@ class LocomotionTask(BaseTask):
 
         rew_dict = dict(
             balance=balance_rew * 0.5,
-            fwd_vel=forward_vel_rew * 4,
+            fwd_vel=forward_vel_rew * 8.5,
             yaw_rat=yaw_rate_rew * 2,
             lateral_vel=lateral_vel_rew * 2,
             vertical_vel=vertical_vel_rew * 0.5,
             ang_vel=ang_vel_rew * 0.8,
             twist=twist_rew * 2.5,
-            foot_clr=foot_clear_rew * balance_rew * 5,
+            foot_clr=foot_clear_rew * balance_rew * 20,
             foot_supt=foot_support_rew * balance_rew * 0.7,
-            foot_heit=foot_height_rew * balance_rew * 0.8,
+            foot_heit=foot_height_rew * balance_rew * 2,
             leg_width_rew=leg_width_rew * balance_rew * 1.2,
             act_const=action_constraint_rew * balance_rew * 0.4,
             sa_const=sa_constraint_rew * balance_rew * 0.2,

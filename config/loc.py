@@ -91,29 +91,29 @@ class H1Config:
         decimation = 10
         stiffness = {
             "hip_yaw": 300,
-            "hip_roll": 300,
+            "hip_roll": 200,
             "hip_pitch": 250,
             "knee": 300,
-            "ankle": 100,
+            "ankle": 80,
             "torso": 300,
             "shoulder": 200,
             "elbow": 200,
         }  # [N*m/rad]
         damping = {
-            "hip_yaw": 6.0,
+            "hip_yaw": 10.0,
             "hip_roll": 15.0,
             "hip_pitch": 10.0,
             "knee": 8,
-            "ankle": 2.0,
+            "ankle": 5.0,
             "torso": 2,
             "shoulder": 2,
             "elbow": 2,
         }  # [N*m*s/rad]
 
     class init_state(SetDict2Class):  # 初始状态
-        random_rot = True
+        random_rot = False
         num_legs = 2
-        pos = [0.0, 0.0, 1.1]  # x,y,z [m]
+        pos = [0.0, 0.0, 1.06]  # x,y,z [m]
         rot = [0.0, 0.0, 0.0, 1.0]  # x,y,z,w [quat]
         lin_vel = [0.0] * 3  # x,y,z [m/s]
         ang_vel = [0.0] * 3  # x,y,z [rad/s]
@@ -184,7 +184,7 @@ class H1Config:
         # if true: compute ang vel command from heading error #False:直接告诉你转多快;Ture:只告诉你“面朝哪”
         heading_command = False
         # 修改
-        lin_vel_x_range = [0.2, 1.0]
+        lin_vel_x_range = [0.2, 0.7]
         # lin_vel_x_range = [-0.1, 0.1]  # 最多向前：0.1 m/s;最多向后：0.1 m/s #原始
         # 修改
         ang_vel_yaw_range = [0, 0]
