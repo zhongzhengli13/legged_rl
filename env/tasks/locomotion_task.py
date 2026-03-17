@@ -351,7 +351,7 @@ class LocomotionTask(BaseTask):
         ]  # terrain_origins[level, type] → 某种地形、某个难度，对应的世界坐标起点
 
     def designed_command(self):
-        # 修改 直接给一个恒定的速度，比如 1.0 m/s，看看它稳不稳
+        # 修改 直接给一个恒定的速度
         self.commands[:, [0]] = 0.4
         self.commands[:, [1]] = 0.0
         self.commands[:, [2]] = 0.0  # 不转弯
@@ -665,11 +665,11 @@ class LocomotionTask(BaseTask):
     # #     static_env_count = 400  # 固定前 400 个环境用于练习站立
     # #     # 找出本次需要重置的 ID 中，属于前 400 号的那些
     # #     static_indices = env_ids[env_ids < static_env_count]
-        
+
     # #     if len(static_indices) > 0:
     # #         self.commands[static_indices, :] = 0.0  # 强制设为 0（静止）
     # #     # =================================================================================
-        
+
     # #     # 修改 删除
     # #     # self.commands[0:220, [0, 2]] = 0.0
     # #     # index = random.randint(400, 3800)
@@ -743,7 +743,7 @@ class LocomotionTask(BaseTask):
     #     # 强制侧向速度 (Y) 和 旋转速度 (Yaw) 为 0
     #     self.commands[env_ids, 1] = 0.0
     #     self.commands[env_ids, 2] = 0.0
-        
+
     #     # --- 3. Heading Command (如果你开启了 heading 模式) ---
     #     if self.cfg.command.heading_command:
     #         self.commands[env_ids, 3] = torch_rand_float(
@@ -764,7 +764,7 @@ class LocomotionTask(BaseTask):
     #     # 这可以防止随着课程难度增加，机器人忘了怎么站立
     #     static_env_count = 400
     #     static_indices = env_ids[env_ids < static_env_count]
-        
+
     #     if len(static_indices) > 0:
     #         self.commands[static_indices, :] = 0.0  # 强制所有速度设为 0
 
@@ -807,7 +807,7 @@ class LocomotionTask(BaseTask):
             torch.norm(self.commands[env_ids, :3], dim=1, keepdim=True) < 0.11,
             False, True
         ).float()
-        
+
         # 同步命令与标志位
         self.commands[env_ids, :3] *= self.static_flag[env_ids]
 
@@ -907,7 +907,9 @@ class LocomotionTask(BaseTask):
         )  # lateral_vel_rew = exp( −k * vy² ) #原始是5.0/...
         # 【新增】线性惩罚项！ #修改
         # 只要有侧向速度，就直接扣分。这样即使漂移很快，梯度依然存在，逼迫网络修正。
-        lateral_vel_rew -= 2.0 * torch.abs(self.env.base_lin_vel[:, [1]])
+        # lateral_vel_rew -= 2.0 * torch.abs(self.env.base_lin_vel[:, [1]]) #原始
+        lateral_vel_rew -= 3.0 * \
+            torch.abs(self.env.base_lin_vel[:, [1]])  # 修改 new
 
         base_heit_rew = torch.exp(
             -60 * (self.env.base_pos[:, [2]] - 1.0) ** 2
@@ -942,7 +944,7 @@ class LocomotionTask(BaseTask):
 
         # stride_rew = torch.abs(self.env.foot_pos_hd[:, [0]] - self.env.foot_pos_hd[:, [3]]).clip(max=0.5) / 0.5
         # stride_rew *= self.static_flag
-        
+
         # 找到这行代码：lateral_vel_rew += (-0.1 / lin_vel_x_norm ...) #修改
         # 把它注释掉或者删除，因为我们上面已经加了更强的线性惩罚，不需要这个弱惩罚了。
         lateral_vel_rew += (
@@ -1077,7 +1079,7 @@ class LocomotionTask(BaseTask):
         # ---------------------------------------------------------------------
         # 【修复版】足端力奖励逻辑
         # ---------------------------------------------------------------------
-        
+
         # 1. 摆动相惩罚：摆动脚不应受力（保持原样）
         feet_contact_frc_rew = (
             -torch.norm(self.env.foot_frc * self.foot_swing_mask,
@@ -1093,7 +1095,7 @@ class LocomotionTask(BaseTask):
             (20.0 - self.env.foot_frc).clip(min=0.0) * self.foot_support_mask,
             dim=1, keepdim=True
         )
-        
+
         # 3. 静止模式惩罚（修复BUG）：
         # 原代码逻辑反了（变成了禁止力小）。
         # 修复：改为 (force - 250).clip(min=0) * -1。
@@ -1103,10 +1105,15 @@ class LocomotionTask(BaseTask):
         #     dim=1, keepdim=True
         # )
         # 修改为：
+        # feet_contact_frc_rew += -torch.sum(
+        #     (20.0 - self.env.foot_frc).clip(min=0.0) * self.foot_support_mask, # <--- 修正为 mask
+        #     dim=1, keepdim=True
+        # )
         feet_contact_frc_rew += -torch.sum(
-            (20.0 - self.env.foot_frc).clip(min=0.0) * self.foot_support_mask, # <--- 修正为 mask
+            (self.env.foot_frc - 350.0).clip(min=0.0),
             dim=1, keepdim=True
-        )
+        ) * torch.logical_not(self.static_flag)  # 修改 new
+
         clip_foot_h = torch.abs(self.foot_height) + 0.03
 
         """
@@ -1403,29 +1410,29 @@ class LocomotionTask(BaseTask):
             balance=balance_rew * 0.5,
             fwd_vel=forward_vel_rew * 5.5,
             yaw_rat=yaw_rate_rew * 2,
-            lateral_vel=lateral_vel_rew * 2,
+            lateral_vel=lateral_vel_rew * 4,
             vertical_vel=vertical_vel_rew * 0.5,
             ang_vel=ang_vel_rew * 0.8,
             twist=twist_rew * 2.5,
             foot_clr=foot_clear_rew * balance_rew * 5,
             foot_supt=foot_support_rew * balance_rew * 0.7,
             foot_heit=foot_height_rew * balance_rew * 0.8,
-            leg_width_rew=leg_width_rew * balance_rew * 1.2,
+            leg_width_rew=leg_width_rew * balance_rew * 2,
             act_const=action_constraint_rew * balance_rew * 0.4,
             sa_const=sa_constraint_rew * balance_rew * 0.2,
-            foot_phase=foot_phase_rew * balance_rew * 0.5,
+            foot_phase=foot_phase_rew * balance_rew * 4,
             jnt_pos_err=joint_pos_error_rew * balance_rew * 0.3,
-            act_smo=action_smooth_rew * balance_rew * 0.05,
-            net_smo=net_out_smooth_rew * balance_rew * 0.00002,
+            act_smo=action_smooth_rew * balance_rew * 0.15,
+            net_smo=net_out_smooth_rew * balance_rew * 0.0005,
             net_out_val=net_out_val_rew * balance_rew * 0.00001,
             foot_slip=foot_slip_rew * balance_rew * 1.2,
             foot_vz=foot_vz_rew * 0.3 * balance_rew,
             foot_acc=foot_acc_rew * balance_rew * 0.05,
-            foot_sft=foot_soft_rew * 1 * balance_rew,
-            jnt_vel=joint_velocity_rew * balance_rew * 0.01,
+            foot_sft=foot_soft_rew * 2 * balance_rew,
+            jnt_vel=joint_velocity_rew * balance_rew * 0.05,
             feet_py=foot_py_rew * balance_rew * 0.5,
             feet_frc=feet_contact_frc_rew * 0.003,
-            joint_tor=joint_tor_rew * 0.001,
+            joint_tor=joint_tor_rew * 0.01,
             pmf=pmf_rew * balance_rew * 0.03,
         )  # act_smo 是惩罚“动作突变”。虽然为了平滑，但如果权重太大，机器人会觉得“我不动就不会有突变”，导致它不愿意快速响应指令。
         if self.debug:

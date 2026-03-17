@@ -41,7 +41,7 @@ def convert(name: str, model: nn.Module, input: np.ndarray):
 
 
 actor_policy = load_actor(class_to_dict(cfg.policy), deploy=True).eval()
-policy_path = join(model_dir, 'all/policy_2000.pt')
+policy_path = join(model_dir, 'all/policy_1000.pt')
 # policy_path = join(model_dir, 'policy.pt')
 assert exists(policy_path), policy_path
 saved_model = torch.load(policy_path, map_location='cpu')
