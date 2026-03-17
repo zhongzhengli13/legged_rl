@@ -71,9 +71,16 @@ class H1Config:
         # """
         # high_ranges = [3.5] * 4 + [1.0, 1.8, -0.5] * 4
         # low_ranges = [0.5] * 4 + [-1.0, -0.2, -2.2] * 4
-        #修改
-        high_ranges = [1.0, 1.0, 3.0, 2.6, 1.0] * 2  # HipYaw, HipRoll, HipPitch, Knee, Ankle (左右腿)
-        low_ranges  = [-1.0, -1.0, -3.0, -0.5, -1.0] * 2
+        # 修改
+        # HipYaw, HipRoll, HipPitch, Knee, Ankle (左右腿)
+        # 原始
+        # high_ranges = [1.0, 1.0, 3.0, 2.6, 1.0] * 2
+        # low_ranges = [-1.0, -1.0, -3.0, -0.5, -1.0] * 2
+        # 修改 gem
+        # high_ranges = [0.5, 0.5, 2.6, 2.1, 0.6] * 2
+        # low_ranges = [-0.5, -0.5, -3.14, -0.3, -0.9] * 2
+        high_ranges = [0.43, 0.43, 2.53, 2.05, 0.52] * 2
+        low_ranges = [-0.43, -0.43, -3.14, -0.26, -0.87] * 2
 
         ref_joint_pos = (
             [0.0, 0.0, -0.2, 0.4, -0.2] * 2 + [0] + ([0.0] * 4) * 2
@@ -89,32 +96,57 @@ class H1Config:
         #     12.0
         # ] * 10  # + [12.] + [5.] * 8  # f*2+ (hip_yaw, hip_roll, hip_pith, knee_pitch, ankle_pith,should roll,shoulder pitch,elbow) * 2
         # inc_low_ranges = [0.5] * 2 + [-12.0] * 10  # + [-12.] + [-5.] * 8
-        ## 增量范围可以保持较大的值，或者稍微收紧一点以防动作太猛 修改
-        inc_high_ranges = [2.0] * 2 + [5.0] * 10 
-        inc_low_ranges = [-2.0] * 2 + [-5.0] * 10
+        # 增量范围可以保持较大的值，或者稍微收紧一点以防动作太猛 修改 原始
+        # inc_high_ranges = [2.0] * 2 + [5.0] * 10
+        # inc_low_ranges = [-2.0] * 2 + [-5.0] * 10
+        # 修改 gem
+        # inc_high_ranges = [0.1, 0.1] + [0.3] * 10
+        # inc_low_ranges = [-0.1, -0.1] + [-0.3] * 10
+        inc_high_ranges = [3.5, 3.5] + [12.0] * 10
+        inc_low_ranges = [0.5, 0.5] + [-12.0] * 10
 
     class pd_gains(SetDict2Class):
         decimation = 10
+        # stiffness = {
+        #     "hip_yaw": 200,
+        #     "hip_roll": 200,
+        #     "hip_pitch": 200,
+        #     "knee": 300,
+        #     "ankle": 40,
+        #     "torso": 300,
+        #     "shoulder": 200,
+        #     "elbow": 200,
+        # }  # [N*m/rad] #原始
         stiffness = {
-            "hip_yaw": 200,
-            "hip_roll": 200,
-            "hip_pitch": 200,
-            "knee": 300,
-            "ankle": 40,
+            "hip_yaw": 290,
+            "hip_roll": 290,
+            "hip_pitch": 250,
+            "knee": 290,
+            "ankle": 270,
             "torso": 300,
             "shoulder": 200,
             "elbow": 200,
-        }  # [N*m/rad]
+        }
+        # damping = {
+        #     "hip_yaw": 15.0,
+        #     "hip_roll": 30.0,
+        #     "hip_pitch": 15.0,
+        #     "knee": 25,
+        #     "ankle": 4.0,
+        #     "torso": 10,
+        #     "shoulder": 5,
+        #     "elbow": 5,
+        # }  # [N*m*s/rad] #原始
         damping = {
-            "hip_yaw": 15.0,
-            "hip_roll": 30.0,
-            "hip_pitch": 15.0,
-            "knee": 25,
-            "ankle": 4.0,
-            "torso": 10,
-            "shoulder": 5,
-            "elbow": 5,
-        }  # [N*m*s/rad]
+            "hip_yaw": 8.0,
+            "hip_roll": 8.0,
+            "hip_pitch": 8.0,
+            "knee": 9.0,
+            "ankle": 7.0,
+            "torso": 2.0,
+            "shoulder": 2.0,
+            "elbow": 2.0,
+        }
 
     class init_state(SetDict2Class):  # 初始状态
         random_rot = True
