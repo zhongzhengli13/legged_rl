@@ -356,15 +356,16 @@ class LocomotionTask(BaseTask):
         self.commands[:, [1]] = 0.0
         self.commands[:, [2]] = 0.0  # 不转弯
         self.commands[:, [3]] = 0.0
-        # if self.env.common_step_counter < 200:
-        #     self.commands[:, [0]] = -0.0
-        #     self.commands[:, [2]] = 0
-        # else:
-        #     self.commands[:, [0]] = 0.2
-        #     self.commands[:, [2]] = (
-        #         -0.0
-        #     )  # torch.clip(5. * smallest_signed_angle_between(self.env.base_euler[:, [2]],
-        #     # -pi / 2. * sin(5. * (self.env.common_step_counter - 60) * self.env.dt)), min=-4., max=4.)
+
+        # 修改 gem
+        # --- 增加动态纠偏逻辑 ---
+        forward = quat_apply(self.env.base_quat, self.env.forward_vec)
+        heading = torch.atan2(forward[:, 1], forward[:, 0])
+        # 根据当前朝向误差，动态生成转向指令
+        self.commands[:, [2]] = torch.clip(
+            0.5 * wrap_to_pi(self.commands[:, [3]] - heading), -1.0, 1.0
+        )
+        # ------------------------
 
         self.static_flag[:] = torch.where(
             torch.norm(self.commands[:, :3], dim=1,
@@ -781,34 +782,74 @@ class LocomotionTask(BaseTask):
     #     # 如果 Flag 判定为静止，强制把微小的随机命令归零，防止抖动
     #     self.commands[env_ids, :3] *= self.static_flag[env_ids]
 
+    # 原始
+    # def _resample_commands(self, env_ids):
+    #     """完全重写：强制仅生成 X 轴直线指令，屏蔽侧向和旋转"""
+    #     # 1. 清除旧命令
+    #     self.commands[env_ids, :] = 0.
+
+    #     # 2. 强制仅给定 X 方向速度 (0.4 ~ 1.0 m/s)
+    #     # 必须要给一个明确的正向速度，不能太小，否则机器人会因为想“偷懒”而站着不动
+    #     self.commands[env_ids, 0] = torch_rand_float(
+    #         0.4, 1.0, (len(env_ids), 1), device=self.device
+    #     ).squeeze(1)
+
+    #     # 3. 强制 Y (侧向) 和 Yaw (旋转) 为 0
+    #     self.commands[env_ids, 1] = 0.
+    #     self.commands[env_ids, 2] = 0.
+
+    #     # 4. 锚点环境 (保持前400个环境静止，防止课程崩塌)
+    #     static_env_count = 400
+    #     static_indices = env_ids[env_ids < static_env_count]
+    #     if len(static_indices) > 0:
+    #         self.commands[static_indices, :] = 0.
+
+    #     # 5. 更新静止标志位
+    #     self.static_flag[env_ids] = torch.where(
+    #         torch.norm(self.commands[env_ids, :3], dim=1, keepdim=True) < 0.11,
+    #         False, True
+    #     ).float()
+
+    #     # 同步命令与标志位
+    #     self.commands[env_ids, :3] *= self.static_flag[env_ids]
+    # 修改 gem
     def _resample_commands(self, env_ids):
-        """完全重写：强制仅生成 X 轴直线指令，屏蔽侧向和旋转"""
+        """引入 Heading 纠正的命令重采样"""
         # 1. 清除旧命令
         self.commands[env_ids, :] = 0.
 
-        # 2. 强制仅给定 X 方向速度 (0.4 ~ 1.0 m/s)
-        # 必须要给一个明确的正向速度，不能太小，否则机器人会因为想“偷懒”而站着不动
+        # 2. X 方向速度 (0.4 ~ 1.0 m/s)
         self.commands[env_ids, 0] = torch_rand_float(
             0.4, 1.0, (len(env_ids), 1), device=self.device
         ).squeeze(1)
 
-        # 3. 强制 Y (侧向) 和 Yaw (旋转) 为 0
+        # 3. Y 侧向速度保持 0
         self.commands[env_ids, 1] = 0.
-        self.commands[env_ids, 2] = 0.
 
-        # 4. 锚点环境 (保持前400个环境静止，防止课程崩塌)
+        # 4. 【关键修复】开启 Heading 纠正模式
+        # 强制目标朝向永远为 0 (正前方)
+        self.commands[env_ids, 3] = 0.0
+        # 获取当前朝向
+        forward = quat_apply(
+            self.env.base_quat[env_ids], self.env.forward_vec[env_ids])
+        heading = torch.atan2(forward[:, 1], forward[:, 0])
+        # 将“朝向误差”转化为“角速度指令 (yaw_rate)”
+        # 如果身体向左偏了，就会产生向右转的角速度指令；反之亦然。
+        self.commands[env_ids, 2] = torch.clip(
+            0.5 * wrap_to_pi(self.commands[env_ids, 3] - heading), -1.0, 1.0
+        )
+
+        # --- 锚点环境 (保持前400个环境静止，防止课程崩塌) ---
         static_env_count = 400
         static_indices = env_ids[env_ids < static_env_count]
         if len(static_indices) > 0:
             self.commands[static_indices, :] = 0.
 
-        # 5. 更新静止标志位
+        # --- 更新静止标志位 ---
         self.static_flag[env_ids] = torch.where(
             torch.norm(self.commands[env_ids, :3], dim=1, keepdim=True) < 0.11,
             False, True
         ).float()
-
-        # 同步命令与标志位
         self.commands[env_ids, :3] *= self.static_flag[env_ids]
 
     def terminate(self):
@@ -908,9 +949,10 @@ class LocomotionTask(BaseTask):
         # 【新增】线性惩罚项！ #修改
         # 只要有侧向速度，就直接扣分。这样即使漂移很快，梯度依然存在，逼迫网络修正。
         # lateral_vel_rew -= 2.0 * torch.abs(self.env.base_lin_vel[:, [1]]) #原始
-        lateral_vel_rew -= 3.0 * \
-            torch.abs(self.env.base_lin_vel[:, [1]])  # 修改 new
-
+        # lateral_vel_rew -= 3.0 * \
+        #     torch.abs(self.env.base_lin_vel[:, [1]])  # 修改 new 修改
+        lateral_vel_rew -= 1.9 * \
+            torch.abs(self.env.base_lin_vel[:, [1]])  # 修改 gem
         base_heit_rew = torch.exp(
             -60 * (self.env.base_pos[:, [2]] - 1.0) ** 2
         )  # self.env.base_pos[:, [2]]实际高度；1m 为期望高度
@@ -937,6 +979,10 @@ class LocomotionTask(BaseTask):
             )
             * balance_rew
         )  # exp(-k * (cmd_yaw - real_yaw)^2) * balance_rew #原始2.5/...
+
+        # 修改 新增 gem
+        yaw_rate_rew -= 1.5 * \
+            torch.abs(self.commands[:, [2]] - self.env.base_ang_vel[:, [2]])
 
         # # 【新增】线性惩罚项！防止它歪头。#修改
         # yaw_rate_rew -= 1.0 * torch.abs(self.commands[:, [2]] - self.env.base_ang_vel[:, [2]])
