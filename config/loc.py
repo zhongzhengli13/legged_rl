@@ -26,7 +26,7 @@ class H1Config:
     class env(SetDict2Class):
         cfg = "loc"
         task = "LocomotionTask"
-        num_envs = 4096
+        num_envs = 8192
         env_spacing = 3.0  # not used with heightfields/trimeshes
         send_timeouts = True  # send time out information to the algorithm
         episode_length_s = 10  # episode length in seconds
@@ -221,8 +221,8 @@ class H1Config:
         )
         # if true: compute ang vel command from heading error #False:直接告诉你转多快;Ture:只告诉你“面朝哪”
         heading_command = False
-        # 修改
-        lin_vel_x_range = [0.3, 0.7]
+        # 修改 ggg
+        lin_vel_x_range = [0, 0.7]
         # lin_vel_x_range = [-0.1, 0.1]  # 最多向前：0.1 m/s;最多向后：0.1 m/s #原始
         # 修改
         ang_vel_yaw_range = [0, 0]

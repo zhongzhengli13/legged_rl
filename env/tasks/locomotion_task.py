@@ -350,52 +350,87 @@ class LocomotionTask(BaseTask):
             self.env.terrain_levels[env_ids], self.env.terrain_types[env_ids]
         ]  # terrain_origins[level, type] → 某种地形、某个难度，对应的世界坐标起点
 
+    # 原始
+    # def designed_command(self):
+    #     # 修改 直接给一个恒定的速度
+    #     self.commands[:, [0]] = 0.4
+    #     self.commands[:, [1]] = 0.0
+    #     self.commands[:, [2]] = 0.0  # 不转弯
+    #     self.commands[:, [3]] = 0.0
+
+    #     # 修改 gem
+    #     # --- 增加动态纠偏逻辑 ---
+    #     forward = quat_apply(self.env.base_quat, self.env.forward_vec)
+    #     heading = torch.atan2(forward[:, 1], forward[:, 0])
+    #     # 根据当前朝向误差，动态生成转向指令
+    #     self.commands[:, [2]] = torch.clip(
+    #         0.5 * wrap_to_pi(self.commands[:, [3]] - heading), -1.0, 1.0
+    #     )
+    #     # ------------------------
+
+    #     self.static_flag[:] = torch.where(
+    #         torch.norm(self.commands[:, :3], dim=1,
+    #                    keepdim=True) < 0.11, False, True
+    #     ).float()
+    #     self.commands[:, :3] *= self.static_flag[:]
+
+    #     self.commands[:, 0:1] *= torch.where(
+    #         torch.norm(self.commands[:, 0:1], dim=1,
+    #                    keepdim=True) < 0.11, False, True
+    #     ).float()
+    #     self.commands[:, 2:3] *= torch.where(
+    #         torch.norm(self.commands[:, 2:3], dim=1,
+    #                    keepdim=True) < 0.11, False, True
+    #     ).float()
+
+    #     # self.command_boundary = 0.00000001
+    #     self.low_command = torch.logical_and(
+    #         (torch.abs(self.commands[:, [0]]) < self.command_boundary),
+    #         (torch.abs(self.commands[:, [2]]) < self.command_boundary),
+    #     )
+    #     self.high_command = torch.logical_not(self.low_command)
+    #     # elif self.env.common_step_counter < 310:
+    #     #     self.commands[:, [0]] = 1.6
+    #     #     self.commands[:, [2]] = -3.8  # torch.clip(4. * smallest_signed_angle_between(self.env.base_euler[:, [2]],
+    #     #     # -pi / 2. * sin(5. * (self.env.common_step_counter - 90) * self.env.dt)), min=-4., max=4.)
+    #     # elif self.env.common_step_counter < 600:
+    #     #     self.commands[:, [0]] = 4.
+    #     #     self.commands[:, [2]] = torch.clip(4.5 * smallest_signed_angle_between(self.env.base_euler[:, [2]], 0.),
+    #     #                                        min=-4., max=4.)
+    # 修改 gem gem
     def designed_command(self):
-        # 修改 直接给一个恒定的速度
+        # 1. 强制设定基准命令
         self.commands[:, [0]] = 0.4
         self.commands[:, [1]] = 0.0
-        self.commands[:, [2]] = 0.0  # 不转弯
-        self.commands[:, [3]] = 0.0
+        self.commands[:, [3]] = 0.0  # 目标永远朝向绝对正前方(0度)
 
-        # 修改 gem
-        # --- 增加动态纠偏逻辑 ---
+        # 2. 动态纠偏逻辑 (Virtual Compass)
         forward = quat_apply(self.env.base_quat, self.env.forward_vec)
         heading = torch.atan2(forward[:, 1], forward[:, 0])
-        # 根据当前朝向误差，动态生成转向指令
+        # 【修改点 A】：将增益从 0.5 提高到 1.5，让它对偏航更加敏感，纠偏更果断
         self.commands[:, [2]] = torch.clip(
-            0.5 * wrap_to_pi(self.commands[:, [3]] - heading), -1.0, 1.0
+            1.5 * wrap_to_pi(self.commands[:, [3]] - heading), -1.0, 1.0
         )
-        # ------------------------
 
+        # 3. 更新静止状态标志位
         self.static_flag[:] = torch.where(
             torch.norm(self.commands[:, :3], dim=1,
                        keepdim=True) < 0.11, False, True
         ).float()
+
+        # 只有在完全静止状态下，才切断微弱指令防止发抖
         self.commands[:, :3] *= self.static_flag[:]
 
-        self.commands[:, 0:1] *= torch.where(
-            torch.norm(self.commands[:, 0:1], dim=1,
-                       keepdim=True) < 0.11, False, True
-        ).float()
-        self.commands[:, 2:3] *= torch.where(
-            torch.norm(self.commands[:, 2:3], dim=1,
-                       keepdim=True) < 0.11, False, True
-        ).float()
+        # 【修改点 B】：删除下面这些单独针对某一轴进行的 < 0.11 的清零操作（死区死穴）！
+        # 删掉：self.commands[:, 0:1] *= torch.where(...)
+        # 删掉：self.commands[:, 2:3] *= torch.where(...)
 
-        # self.command_boundary = 0.00000001
+        # 4. 其它低级/高级指令判断
         self.low_command = torch.logical_and(
             (torch.abs(self.commands[:, [0]]) < self.command_boundary),
             (torch.abs(self.commands[:, [2]]) < self.command_boundary),
         )
         self.high_command = torch.logical_not(self.low_command)
-        # elif self.env.common_step_counter < 310:
-        #     self.commands[:, [0]] = 1.6
-        #     self.commands[:, [2]] = -3.8  # torch.clip(4. * smallest_signed_angle_between(self.env.base_euler[:, [2]],
-        #     # -pi / 2. * sin(5. * (self.env.common_step_counter - 90) * self.env.dt)), min=-4., max=4.)
-        # elif self.env.common_step_counter < 600:
-        #     self.commands[:, [0]] = 4.
-        #     self.commands[:, [2]] = torch.clip(4.5 * smallest_signed_angle_between(self.env.base_euler[:, [2]], 0.),
-        #                                        min=-4., max=4.)
 
     def step(self):
 
@@ -835,8 +870,15 @@ class LocomotionTask(BaseTask):
         heading = torch.atan2(forward[:, 1], forward[:, 0])
         # 将“朝向误差”转化为“角速度指令 (yaw_rate)”
         # 如果身体向左偏了，就会产生向右转的角速度指令；反之亦然。
+
+        # 原始
+        # self.commands[env_ids, 2] = torch.clip(
+        #     0.5 * wrap_to_pi(self.commands[env_ids, 3] - heading), -1.0, 1.0
+        # )
+        # 修改 gem gem
+        # 将“朝向误差”转化为“角速度指令 (yaw_rate)”
         self.commands[env_ids, 2] = torch.clip(
-            0.5 * wrap_to_pi(self.commands[env_ids, 3] - heading), -1.0, 1.0
+            1.5 * wrap_to_pi(self.commands[env_ids, 3] - heading), -1.0, 1.0
         )
 
         # --- 锚点环境 (保持前400个环境静止，防止课程崩塌) ---
