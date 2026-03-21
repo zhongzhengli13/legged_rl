@@ -77,7 +77,8 @@ class LocomotionTask(BaseTask):
             num_envs=self.num_envs,
             num_legs=self.num_legs,
             device=self.device,
-        )  # 维护每条腿的 相位 φ；判断：哪条腿在支撑（support），哪条腿在摆动（swing）。φ∈[0,π)  → 支撑相；φ∈[π,2π) → 摆动相
+            # 维护每条腿的 相位 φ；判断：哪条腿在支撑（support），哪条腿在摆动（swing）。φ∈[0,π)  → 支撑相；φ∈[π,2π) → 摆动相
+        )
         self.phase_modulator.reset(
             convert_phi=self.convert_phi,
             env_ids=torch.arange(self.num_envs),
@@ -341,7 +342,8 @@ class LocomotionTask(BaseTask):
             # 格式：randint_like(input, low=0, high, \*, dtype=None, layout=torch.strided, device=None, requires_grad=False, memory_format=torch.preserve_format) -> Tensor
             torch.randint_like(
                 self.env.terrain_levels[env_ids], self.env.max_terrain_level
-            ),  # 下届默认为0；self.env.terrain_levels[env_ids]对应的是input（只拿它的“外壳”——shape、dtype、device——作为生成新张量的模板，完全不看里面的数值。；high对应的是 self.env.max_terrain_level
+                # 下届默认为0；self.env.terrain_levels[env_ids]对应的是input（只拿它的“外壳”——shape、dtype、device——作为生成新张量的模板，完全不看里面的数值。；high对应的是 self.env.max_terrain_level
+            ),
             torch.clip(
                 self.env.terrain_levels[env_ids], 0
             ),  # 地形等级最小是 0（最平地）
@@ -993,7 +995,7 @@ class LocomotionTask(BaseTask):
         # lateral_vel_rew -= 2.0 * torch.abs(self.env.base_lin_vel[:, [1]]) #原始
         # lateral_vel_rew -= 3.0 * \
         #     torch.abs(self.env.base_lin_vel[:, [1]])  # 修改 new 修改
-        lateral_vel_rew -= 1.9 * \
+        lateral_vel_rew -= 4 * \
             torch.abs(self.env.base_lin_vel[:, [1]])  # 修改 gem
         base_heit_rew = torch.exp(
             -60 * (self.env.base_pos[:, [2]] - 1.0) ** 2
@@ -1273,7 +1275,8 @@ class LocomotionTask(BaseTask):
                 keepdim=True,
             )
             * self.static_flag
-        )  # [:, :, :2]-》平面速度，vx && vy #torch.norm(self.env.foot_vel[... , :2], dim=-1)->slip_speed #命令速度越小，对脚掌在地面上的 任何二维滑移 越不能容忍。
+            # [:, :, :2]-》平面速度，vx && vy #torch.norm(self.env.foot_vel[... , :2], dim=-1)->slip_speed #命令速度越小，对脚掌在地面上的 任何二维滑移 越不能容忍。
+        )
 
         foot_vz_rew = (
             -0.1
@@ -1340,16 +1343,34 @@ class LocomotionTask(BaseTask):
             ** 2
         )
 
+        # action_constraint_rew = (
+        #     -0.3
+        #     * torch.clip(1.0 / lin_vel_x_norm, 0, 1.5)
+        #     * torch.norm((self.env.joint_pos), dim=1, keepdim=True)
+        # )
+        # action_constraint_rew += (
+        #     -0.5
+        #     * torch.clip(1.0 / lin_vel_x_norm, 0, 1.5)
+        #     * torch.norm((self.env.joint_pos[:, [0, 5]]), dim=1, keepdim=True)
+        # )
+
+        # 改为相对参考位置的偏差，而非绝对零位
+        # 原来以 0 为基准，导致右腿偏向 +0.19 比偏向 -0.2 受到的惩罚更小
+        # 现在以 ref_joint_action 为基准，两腿偏离参考姿态越多惩罚越大
         action_constraint_rew = (
             -0.3
             * torch.clip(1.0 / lin_vel_x_norm, 0, 1.5)
-            * torch.norm((self.env.joint_pos), dim=1, keepdim=True)
+            * torch.norm(
+                self.env.joint_pos[:, :10] - self.ref_joint_action[:, :10],
+                dim=1, keepdim=True
+            )
         )
         action_constraint_rew += (
             -0.5
             * torch.clip(1.0 / lin_vel_x_norm, 0, 1.5)
             * torch.norm((self.env.joint_pos[:, [0, 5]]), dim=1, keepdim=True)
         )
+
         # action_constraint_rew += -2. * torch.norm((self.env.joint_pos[:, [1, 2, 7, 8, 5, 11]]), dim=1, keepdim=True) * self.static_flag
 
         sa_constraint_rew = (
@@ -1474,12 +1495,25 @@ class LocomotionTask(BaseTask):
         # foot_py_rew += 0.5 * (torch.norm(self.env.foot_euler[:, [1, 4]] * support_foot_index, dim=1, keepdim=True)) * (self.static_flag - 1.)
         # foot_py_rew += 0.5 * (torch.norm(self.env.foot_euler[:, [0, 3]] * support_foot_index, dim=1, keepdim=True)) * (self.static_flag - 1.)
 
-        leg_width_rew = -torch.norm(
-            torch.abs(self.env.foot_pos_hd[:, [
-                      1, 4]] - self.env.base_pos_hd[:, [1]])
-            - 0.25,
+        # leg_width_rew = -torch.norm(
+        #     torch.abs(self.env.foot_pos_hd[:, [
+        #               1, 4]] - self.env.base_pos_hd[:, [1]])
+        #     - 0.25,
+        #     dim=1,
+        #     keepdim=True,
+        # )
+        # 【修改】重构步宽惩罚：
+        # 1. 直接约束左右两脚之间的绝对距离 (H1 的理想双脚间距约为 0.3m)
+        # foot_pos_hd[:, 1] 是左脚 Y，foot_pos_hd[:, 4] 是右脚 Y
+        foot_dist_y = self.env.foot_pos_hd[:, 1] - self.env.foot_pos_hd[:, 4]
+        leg_width_rew = -torch.abs(foot_dist_y - 0.3).unsqueeze(1)
+
+        # 2. 为了防止两脚间距是 0.3m 但整体偏离身体中心 (比如两脚都在左边)，加入关于中心的二次方对称约束
+        leg_width_rew -= 2.0 * torch.sum(
+            (self.env.foot_pos_hd[:, [1, 4]] -
+             self.env.base_pos_hd[:, [1]])**2,
             dim=1,
-            keepdim=True,
+            keepdim=True
         )
 
         lsin = torch.sin(self.foot_phase.clone())
@@ -1494,7 +1528,25 @@ class LocomotionTask(BaseTask):
 
         # is_push = torch.norm(self.env.push_force[:, self.env.push_body_id, :].view(self.num_envs, -1), dim=1, keepdim=True) > 100.
 
+        # ===== 新增：腿部对称性惩罚 =====
+        # 正常反相步态中，任意时刻左右腿的偏移量应该"一正一负"互相抵消
+        # mirror_sign: yaw同向、roll反向、pitch同向、knee同向、ankle同向
+        mirror_sign = torch.tensor([1., -1., 1., 1., 1.], device=self.device)
+        left_offset = self.env.joint_pos[:, :5] - self.ref_joint_action[:, :5]
+        right_offset = (
+            self.env.joint_pos[:, 5:10] - self.ref_joint_action[:, 5:10]) * mirror_sign
+
+        # 惩罚"两腿偏移之和不为零"——反相时两者应互相抵消，之和接近 0
+        leg_sym_rew = (
+            -1.5
+            * torch.clip(1.0 / lin_vel_x_norm, 0, 1.5)
+            * torch.norm(left_offset + right_offset, dim=1, keepdim=True) ** 2
+            * self.static_flag
+        )
+        # ===================================
+
         rew_dict = dict(
+            leg_sym=leg_sym_rew * balance_rew * 1.5,   # ← 新增这一行
             balance=balance_rew * 0.5,
             fwd_vel=forward_vel_rew * 5.5,
             yaw_rat=yaw_rate_rew * 2,
@@ -1505,7 +1557,7 @@ class LocomotionTask(BaseTask):
             foot_clr=foot_clear_rew * balance_rew * 5,
             foot_supt=foot_support_rew * balance_rew * 0.7,
             foot_heit=foot_height_rew * balance_rew * 0.8,
-            leg_width_rew=leg_width_rew * balance_rew * 2,
+            leg_width_rew=leg_width_rew * balance_rew * 4,
             act_const=action_constraint_rew * balance_rew * 0.4,
             sa_const=sa_constraint_rew * balance_rew * 0.2,
             foot_phase=foot_phase_rew * balance_rew * 4,
