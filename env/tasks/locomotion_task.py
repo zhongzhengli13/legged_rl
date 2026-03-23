@@ -1373,18 +1373,45 @@ class LocomotionTask(BaseTask):
 
         # action_constraint_rew += -2. * torch.norm((self.env.joint_pos[:, [1, 2, 7, 8, 5, 11]]), dim=1, keepdim=True) * self.static_flag
 
+        # 修复：改为相对参考位置，原来用绝对零位会惩罚正常站姿
         sa_constraint_rew = (
             -0.1
             * torch.clip(1.0 / lin_vel_x_norm, min=0.0, max=1.5)
-            * torch.norm(self.env.joint_pos, dim=1, keepdim=True) ** 2
+            * torch.norm(
+                self.env.joint_pos[:, :10] - self.ref_joint_action[:, :10],
+                dim=1, keepdim=True
+            ) ** 2
             * self.static_flag
         )
 
+        # sa_constraint_rew += (
+        #     -self.static_flag
+        #     * torch.clip(1.0 / lin_vel_x_norm, 0, 2)
+        #     * torch.norm(
+        #         (self.env.joint_pos[:, :5] * support_foot_index[:, [0]]),
+        #         dim=1,
+        #         keepdim=True,
+        #     )
+        #     ** 2
+        # )
+        # sa_constraint_rew += (
+        #     -self.static_flag
+        #     * torch.clip(1.0 / lin_vel_x_norm, 0, 2)
+        #     * torch.norm(
+        #         (self.env.joint_pos[:, 5:10] * support_foot_index[:, [1]]),
+        #         dim=1,
+        #         keepdim=True,
+        #     )
+        #     ** 2
+        # )
+        # 修改：以 ref_joint_action 为基准，惩罚支撑腿偏离参考站姿
+        # 原来以绝对零位为基准，把 knee=+0.4、ankle=-0.2 的正常站姿当偏差惩罚，是错误的
         sa_constraint_rew += (
             -self.static_flag
             * torch.clip(1.0 / lin_vel_x_norm, 0, 2)
             * torch.norm(
-                (self.env.joint_pos[:, :5] * support_foot_index[:, [0]]),
+                (self.env.joint_pos[:, :5] - self.ref_joint_action[:, :5])
+                * support_foot_index[:, [0]],
                 dim=1,
                 keepdim=True,
             )
@@ -1394,7 +1421,8 @@ class LocomotionTask(BaseTask):
             -self.static_flag
             * torch.clip(1.0 / lin_vel_x_norm, 0, 2)
             * torch.norm(
-                (self.env.joint_pos[:, 5:10] * support_foot_index[:, [1]]),
+                (self.env.joint_pos[:, 5:10] - self.ref_joint_action[:, 5:10])
+                * support_foot_index[:, [1]],
                 dim=1,
                 keepdim=True,
             )
@@ -1543,10 +1571,77 @@ class LocomotionTask(BaseTask):
             * torch.norm(left_offset + right_offset, dim=1, keepdim=True) ** 2
             * self.static_flag
         )
+        # 新增：每条腿单独约束偏离参考值
+        # leg_sym 只管"左右是否对称"，无法发现"两腿反向各自偏离参考"的病态情况
+        # 例如：左腿+0.259 右腿-0.201，leg_sym=+0.058≈0 认为正常，但两腿都偏了很远
+        each_leg_ref_rew = (
+            -1.5
+            * torch.clip(1.0 / lin_vel_x_norm, 0, 1.5)
+            * (
+                torch.norm(
+                    self.env.joint_pos[:, :5] - self.ref_joint_action[:, :5],
+                    dim=1, keepdim=True
+                ) ** 2
+                + torch.norm(
+                    self.env.joint_pos[:, 5:10] - self.ref_joint_action[:, 5:10],
+                    dim=1, keepdim=True
+                ) ** 2
+            )
+            * self.static_flag
+        )
+
+        # 已有的 leg_sym_rew 之后追加：
+        # 踝关节对称性单独强化（当前是 leg_sym 最大误差来源）
+        ankle_sym_rew = (
+            -3.0
+            * torch.clip(1.0 / lin_vel_x_norm, 0, 1.5)
+            * torch.abs(
+                (self.env.joint_pos[:, 4] - self.ref_joint_action[:, 4])
+                + (self.env.joint_pos[:, 9] - self.ref_joint_action[:, 9])  # 踝关节 mirror_sign=1，直接相加
+            ).unsqueeze(1)
+            * self.static_flag
+        )
         # ===================================
+        # 新增：单独惩罚两腿 Hip Yaw 绝对值
+        # 直线行走时两个 hip_yaw 都应趋近 0，现在左腿 +0.208、右腿 -0.161 都过大
+        # 这里同时压两腿，不依赖 mirror_sign 对称性
+        hip_yaw_abs_rew = (
+            -2.0
+            * torch.clip(1.0 / lin_vel_x_norm, 0, 1.5)
+            * (torch.abs(self.env.joint_pos[:, 0:1])   # 左髋 yaw
+            + torch.abs(self.env.joint_pos[:, 5:6]))  # 右髋 yaw
+            * self.static_flag
+        )
+        # 新增：踝关节支撑期专项约束
+        # 问题：右踝支撑期 act=+0.099 但 pos=-0.253，误差0.35rad，PD完全跟不上
+        # 原因：网络在支撑期命令踝关节向上翘，被地面顶住后力矩反馈混乱
+        # 方案：惩罚支撑期踝关节偏离参考值的正方向偏差（向上翘方向）
+        ankle_ref = self.ref_joint_action[:, [4, 9]]        # 参考值 -0.2
+        ankle_pos = self.env.joint_pos[:, [4, 9]]
+        ankle_act = self.current_joint_act[:, [4, 9]]       # 网络给的目标
+
+        # 支撑期掩码（力>20N 认为在撑地）
+        ankle_support = torch.cat([
+            (self.env.foot_frc[:, [0]] > 20).float(),
+            (self.env.foot_frc[:, [1]] > 20).float(),
+        ], dim=1)
+
+        # 惩罚支撑期 act 超过参考值的部分（即向上翘的命令）
+        ankle_constraint_rew = (
+            -4.0
+            * torch.sum(
+                (ankle_act - ankle_ref).clip(min=0.0) * ankle_support,
+                dim=1, keepdim=True,
+            )
+            * self.static_flag
+        )
 
         rew_dict = dict(
-            leg_sym=leg_sym_rew * balance_rew * 1.5,   # ← 新增这一行
+            each_leg_ref=each_leg_ref_rew * balance_rew * 1.0,  # 新增
+            ankle_sym=ankle_sym_rew * balance_rew * 1.5,  # 新增
+            ankle_const=ankle_constraint_rew * balance_rew * 2.0,  # 新增
+            hip_yaw_abs=hip_yaw_abs_rew * balance_rew * 1.2,   # 新增
+            leg_sym=leg_sym_rew * balance_rew * 3.5,   # ← 新增这一行
             balance=balance_rew * 0.5,
             fwd_vel=forward_vel_rew * 5.5,
             yaw_rat=yaw_rate_rew * 2,
@@ -1559,7 +1654,7 @@ class LocomotionTask(BaseTask):
             foot_heit=foot_height_rew * balance_rew * 0.8,
             leg_width_rew=leg_width_rew * balance_rew * 4,
             act_const=action_constraint_rew * balance_rew * 0.4,
-            sa_const=sa_constraint_rew * balance_rew * 0.2,
+            sa_const=sa_constraint_rew * balance_rew * 1.5,
             foot_phase=foot_phase_rew * balance_rew * 4,
             jnt_pos_err=joint_pos_error_rew * balance_rew * 0.3,
             act_smo=action_smooth_rew * balance_rew * 0.15,
